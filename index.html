@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>MSX Stock Analyzer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="page-shell">
+    <header class="hero">
+      <div class="hero-copy">
+        <p class="eyebrow">Muscat Stock Exchange Toolkit</p>
+        <h1>Analyze MSX stocks with fast, practical signals.</h1>
+        <p class="hero-text">
+          Review valuation, dividend yield, earnings growth, momentum, and balance-sheet health in one place.
+          Start with the built-in demo dataset or import your own CSV snapshot.
+        </p>
+      </div>
+
+      <div class="hero-actions">
+        <button id="refreshLiveBtn" class="secondary-btn">Refresh Live MSX</button>
+        <button id="loadSampleBtn" class="primary-btn">Load Demo Data</button>
+        <label class="upload-btn" for="fileInput">Import CSV</label>
+        <input id="fileInput" type="file" accept=".csv" hidden />
+      </div>
+    </header>
+
+    <main class="dashboard">
+      <section class="panel source-panel">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker">Official Source</p>
+            <h2>MSX data workflow</h2>
+          </div>
+        </div>
+        <div class="source-grid">
+          <a class="source-card" href="https://www.msx.om/market-watch-custom.aspx" target="_blank" rel="noreferrer">
+            <strong>MSX Today</strong>
+            <span>Delayed market watch, trends, and exchange summary.</span>
+          </a>
+          <a class="source-card" href="https://www.msx.om/market-watch-history.aspx" target="_blank" rel="noreferrer">
+            <strong>Historical</strong>
+            <span>Official historical market-watch page with export options.</span>
+          </a>
+          <a class="source-card" href="https://www.msx.om/companies.aspx" target="_blank" rel="noreferrer">
+            <strong>Companies</strong>
+            <span>Listed companies directory and security lookup.</span>
+          </a>
+          <a class="source-card" href="https://www.msx.om/Companies-Fin-Pref.aspx" target="_blank" rel="noreferrer">
+            <strong>Financial Performance</strong>
+            <span>Official company financial performance screening page.</span>
+          </a>
+        </div>
+        <p class="source-note">
+          This analyzer is designed to sit on top of official MSX data. Use the pages above to export or collect data,
+          then import a CSV here for ranking and comparison. The MSX site notes that market data is delayed by 15 minutes.
+        </p>
+        <p id="sourceStatus" class="status-banner">Loading market data...</p>
+
+        <div class="ai-analysis-block">
+          <div class="ai-analysis-header">
+            <div>
+              <p class="section-kicker" style="margin-top:24px;">AI-Powered</p>
+              <h2>Technical analysis &amp; buying opportunities</h2>
+              <p class="source-note" style="margin-top:6px;">
+                Scans all loaded stocks using RSI, Bollinger bands, momentum, demand flow, and valuation to surface up to 5 high-conviction buying opportunities. Powered by Claude.
+              </p>
+            </div>
+            <button id="runAiAnalysisBtn" class="ai-run-btn">
+              <span class="ai-btn-icon">◈</span>
+              Run AI analysis
+            </button>
+          </div>
+          <div id="aiAnalysisOutput" class="ai-output-area">
+            <p class="ai-placeholder">Load stock data, then click <strong>Run AI analysis</strong> to identify buying opportunities.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel controls-panel">
+        <div class="controls-grid">
+          <label>
+            <span>Search</span>
+            <input id="searchInput" type="search" placeholder="Ticker or company" />
+          </label>
+
+          <label>
+            <span>Sector</span>
+            <select id="sectorFilter">
+              <option value="all">All sectors</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Strategy</span>
+            <select id="strategySelect">
+              <option value="balanced">Balanced</option>
+              <option value="value">Value</option>
+              <option value="income">Income</option>
+              <option value="growth">Growth</option>
+              <option value="quality">Quality</option>
+            </select>
+          </label>
+
+          <label>
+            <span>Sort by</span>
+            <select id="sortSelect">
+              <option value="overallScore">Overall score</option>
+              <option value="demandScore">Demand score</option>
+              <option value="rsi14">RSI 14</option>
+              <option value="dividendYield">Dividend yield</option>
+              <option value="peRatio">P/E ratio</option>
+              <option value="earningsGrowth">Earnings growth</option>
+              <option value="priceChange1Y">1Y change</option>
+              <option value="marketCapM">Market cap</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="import-note">
+          Recommended import workflow from <a href="https://www.msx.om/" target="_blank" rel="noreferrer">msx.om</a>:
+          export data from the official pages, save or convert it to CSV, then map it to these columns:
+          <code>ticker,company,sector,price,marketCapM,peRatio,pbRatio,dividendYield,earningsGrowth,priceChange1Y,debtToEquity,roe,currentRatio</code>
+        </div>
+      </section>
+
+      <section class="stats-grid" id="statsGrid"></section>
+
+      <section class="panel breakout-panel" id="breakoutPanel" style="display:none;">
+        <div class="panel-header">
+          <div>
+            <p class="section-kicker" style="color:#b85c38;">🔔 Breakout Watch</p>
+            <h2>أسهم على وشك الانطلاق</h2>
+            <p class="muted-text" style="margin:4px 0 0;font-size:0.88rem;">أسهم تظهر عليها علامات التجميع وقرب الانطلاق — رصد تلقائي يتحدث مع كل تحديث</p>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px;">
+            <span id="breakoutTimestamp" class="muted-text" style="font-size:0.8rem;"></span>
+            <span class="breakout-live-badge">● Live scan</span>
+          </div>
+        </div>
+        <div id="breakoutCards" class="breakout-cards"></div>
+      </section>
+
+      <section class="content-grid">
+        <div class="panel rankings-panel">
+          <div class="panel-header">
+            <div>
+              <p class="section-kicker">Rankings</p>
+              <h2>MSX stock screen</h2>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+              <p id="resultCount" class="muted-text"></p>
+              <button id="downloadXlsxBtn" class="secondary-btn" style="padding:8px 14px;font-size:0.86rem;">⬇ Download XLSX</button>
+            </div>
+          </div>
+          <div id="tableContainer" class="table-container"></div>
+        </div>
+
+        <aside class="panel detail-panel">
+          <div class="panel-header">
+            <div>
+              <p class="section-kicker">Detail View</p>
+              <h2 id="detailTitle">Pick a stock</h2>
+            </div>
+          </div>
+
+          <div id="detailContent" class="detail-content">
+            <p class="empty-state">
+              Choose a company from the table to see score breakdown, strengths, risks, and quick interpretation.
+            </p>
+          </div>
+        </aside>
+      </section>
+    </main>
+  </div>
+
+  <!-- Global AI Chat Agent -->
+  <section class="page-shell" style="padding-top:0;padding-bottom:48px;">
+    <div class="panel global-chat-panel">
+      <div class="global-chat-header">
+        <div>
+          <p class="section-kicker">AI Trading Agent</p>
+          <h2>Chat with your MSX analyst</h2>
+          <p class="muted-text" style="margin:4px 0 0;font-size:0.88rem;">Ask anything about MSX stocks, market trends, entry/exit strategies, or portfolio ideas. The agent knows all your loaded stock data.</p>
+        </div>
+        <div class="global-chat-controls">
+          <div class="ai-provider-toggle">
+            <span class="ai-provider-label">AI Provider:</span>
+            <div class="ai-provider-btns">
+              <button class="provider-btn active" data-provider="ollama">🖥 Ollama</button>
+              <button class="provider-btn" data-provider="groq">⚡ Groq</button>
+              <button class="provider-btn" data-provider="openai">⬡ ChatGPT</button>
+            </div>
+          </div>
+          <div id="providerKeyRow" class="provider-key-row" style="display:none;">
+            <input id="providerApiKey" type="password" placeholder="Paste API key here (saved in memory only)" class="provider-key-input"/>
+            <a id="providerKeyLink" href="#" target="_blank" class="provider-key-link">Get free key ↗</a>
+          </div>
+        </div>
+      </div>
+
+      <div id="globalChatMessages" class="global-chat-messages">
+        <div class="chat-msg chat-msg-ai">
+          <div class="chat-msg-bubble">مرحباً! أنا محللك المالي لسوق مسقط للأوراق المالية. يمكنك سؤالي عن أي سهم، استراتيجية دخول أو خروج، مقارنة بين الأسهم، أو توقعات السوق. كيف يمكنني مساعدتك؟<br><br>Hello! I'm your MSX trading analyst. Ask me about any stock, entry/exit strategies, sector comparisons, breakout setups, or market outlook. What would you like to know?</div>
+        </div>
+      </div>
+
+      <div class="global-chat-suggestions">
+        <button class="chat-suggestion" data-q="Which stocks currently show the best risk/reward setup?">Best R:R setups?</button>
+        <button class="chat-suggestion" data-q="Which banking stocks on MSX are most attractive right now?">Banking stocks?</button>
+        <button class="chat-suggestion" data-q="Show me stocks with high dividend yield and low debt.">High yield, low debt</button>
+        <button class="chat-suggestion" data-q="Which stocks show accumulation signals this week?">Accumulation signals?</button>
+        <button class="chat-suggestion" data-q="Compare the top 3 stocks by overall score and tell me which you would pick.">Top 3 comparison</button>
+        <button class="chat-suggestion" data-q="What sectors are showing the most strength on MSX?">Sector strength?</button>
+        <button class="chat-suggestion" data-q="If I have 10,000 OMR to invest in MSX, how would you allocate it across these stocks?">Portfolio allocation?</button>
+      </div>
+
+      <div class="global-chat-input-row">
+        <textarea id="globalChatInput" class="global-chat-textarea" rows="1" placeholder="Ask your MSX analyst anything…"></textarea>
+        <button id="globalChatSend" class="stock-chat-send-btn" style="width:46px;height:46px;font-size:1.2rem;">↑</button>
+      </div>
+      <p class="global-chat-disclaimer">AI responses are for informational purposes only and do not constitute financial advice. Always do your own research before investing.</p>
+    </div>
+  </section>
+
+  <script src="app.js"></script>
+</body>
+</html>

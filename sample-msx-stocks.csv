@@ -1,0 +1,11 @@
+ticker,company,sector,price,marketCapM,peRatio,pbRatio,dividendYield,earningsGrowth,priceChange1Y,debtToEquity,roe,currentRatio
+BKDB,Bank Dhofar,Banking,0.168,430,8.2,0.78,6.4,12.8,14.2,1.8,10.4,1.3
+BKMB,Bank Muscat,Banking,0.292,2330,9.5,1.1,5.8,10.1,11.9,1.5,11.8,1.2
+OMVS,Oman Vision Services,Services,0.121,82,7.1,0.91,7.3,6.2,8.5,0.7,9.6,1.6
+OABC,Oman Arab Bank,Banking,0.189,485,8.9,0.83,6.1,9.4,12.7,1.4,10.9,1.2
+OMTL,Omantel,Telecom,0.972,729,11.4,1.24,5.2,7.8,4.6,1.9,11.2,0.9
+REXC,Renaissance Services,Services,0.381,312,10.2,1.05,4.9,16.1,18.4,0.8,13.4,1.4
+SOAG,Sohar International,Banking,0.154,602,7.8,0.86,6.7,14.8,19.3,1.2,12.2,1.3
+OCCI,Oman Cement,Industrial,0.334,144,9.2,1.02,5.9,11.6,9.1,0.5,10.7,1.8
+ABOB,Al Batinah Power,Utilities,0.089,53,6.8,0.72,8.2,4.9,3.4,0.9,8.8,1.5
+PHPC,Phoenix Power,Utilities,0.121,135,7.3,0.81,7.8,5.1,6.7,1.1,9.3,1.4
