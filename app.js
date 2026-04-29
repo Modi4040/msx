@@ -2239,18 +2239,24 @@ CRITICAL: Return ONLY valid JSON. No markdown fences. No apostrophes in text (us
     // Build pick cards using AI data
     const picksHtml = picks.map((p, i) => {
       const stock = stocks.find(s => s.ticker === p.ticker) || {};
+      // Parse all numeric fields — AI sometimes returns strings instead of numbers
+      const safeNum = (v, fallback) => { const n = parseFloat(v); return isFinite(n) ? n : fallback; };
+      const sp = stock.price || 0;
       const aiPick = {
         ticker: p.ticker,
         company: p.company || stock.company || p.ticker,
         conviction: p.conviction || "medium",
         entry_thesis: p.entry_thesis || "",
         rationale: p.rationale || "",
-        signals: p.signals || [],
+        signals: (p.signals || []).map(s => ({
+          type: s.type || "bullish",
+          label: String(s.label || "")
+        })),
         risk: p.risk || "",
-        _entry: p.entry || stock.price || 0,
-        _target: p.target || (stock.price||0) * 1.1,
-        _stop: p.stop || (stock.price||0) * 0.93,
-        _support: (stock.price||0) * 0.955,
+        _entry:   safeNum(p.entry,   sp > 0 ? sp : 0),
+        _target:  safeNum(p.target,  sp > 0 ? sp * 1.1 : 0),
+        _stop:    safeNum(p.stop,    sp > 0 ? sp * 0.93 : 0),
+        _support: sp > 0 ? sp * 0.955 : 0,
       };
       return renderAiPick(aiPick, i);
     }).join("");
