@@ -43,7 +43,7 @@ window.AI = {
   _notifyKeyChange() { this._listeners.forEach(fn => fn()); },
 
   async call(prompt, maxTokens = 500) {
-    // Try server-side key first (no user key needed)
+    // Step 1: Try server-side key (GROQ_API_KEY env var on server)
     try {
       const resp = await fetch("/api/ai/default", {
         method: "POST",
@@ -51,44 +51,60 @@ window.AI = {
         body: JSON.stringify({ prompt })
       });
       const data = await resp.json();
-      if (resp.ok && data.response) return data.response;
-      // If server has no key configured, fall through to user key
-      if (resp.status !== 500 || !data.error?.includes("not configured")) {
+      if (resp.ok && data.response) {
+        return data.response; // Server key worked — done
+      }
+      // Server has no key configured — fall through to user key
+      if (!data.error?.includes("not configured")) {
         throw new Error(data.error || "AI error");
       }
     } catch (e) {
-      if (!e.message?.includes("not configured") && !e.message?.includes("Failed to fetch")) {
+      // Only fall through if it's a "not configured" or network error
+      // Re-throw any real AI errors (rate limits, invalid requests etc.)
+      const msg = e.message || "";
+      if (!msg.includes("not configured") && !msg.includes("Failed to fetch") && !msg.includes("NetworkError")) {
         throw e;
       }
     }
 
-    // Fallback: use user-provided key
+    // Step 2: Fallback to user-provided key
     if (!this.hasKey()) {
       throw new Error("No API key set. Enter your Groq key in the chat panel below.");
     }
-    if (this.provider === "groq") {
-      const resp = await fetch("/api/ai/chat/groq", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: this.groqKey, prompt })
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "Groq error");
-      return data.response || "";
-    } else {
-      const resp = await fetch("/api/ai/chat/openai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: this.openaiKey, prompt })
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "OpenAI error");
-      return data.response || "";
-    }
+    const endpoint = this.provider === "groq" ? "/api/ai/chat/groq" : "/api/ai/chat/openai";
+    const apiKey = this.provider === "groq" ? this.groqKey : this.openaiKey;
+    const resp = await fetch(endpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ apiKey, prompt })
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || "AI error");
+    return data.response || "";
   }
 };
 
 window.AI.loadSaved();
+
+// Check if server has key configured and update UI accordingly
+(async function checkServerKey() {
+  try {
+    const resp = await fetch("/api/ai/status");
+    const data = await resp.json();
+    if (data.groq || data.openai) {
+      window.AI._serverKeyAvailable = true;
+      // Update provider key row hint
+      const keyRow = document.getElementById("providerKeyRow");
+      const keyInput = document.getElementById("providerApiKey");
+      if (keyRow && keyInput) {
+        const hint = document.createElement("p");
+        hint.style.cssText = "font-size:0.78rem;color:#0b6e4f;margin:4px 0 0;";
+        hint.textContent = "✓ Server AI key active — chat works without entering a key";
+        keyRow.parentNode?.insertBefore(hint, keyRow.nextSibling);
+      }
+    }
+  } catch {}
+})();
 
 
 const sampleStocks = [
