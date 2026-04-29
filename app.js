@@ -1611,10 +1611,18 @@ Return ONLY valid JSON, no markdown:
     const raw = await window.AI.call(prompt, 800);
     let parsed;
     try {
-      const clean = raw.replace(/^```json|^```|```$/gm, "").trim();
+      let clean = raw.replace(/^```json\s*/gm, "").replace(/^```\s*/gm, "").replace(/```\s*$/gm, "").trim();
       const match = clean.match(/\{[\s\S]*\}/);
       parsed = JSON.parse(match ? match[0] : clean);
-    } catch { return; }
+    } catch {
+      try {
+        const fixPrompt = "Fix this JSON and return ONLY the corrected JSON:\n" + raw.slice(0, 1000);
+        const fixed = await window.AI.call(fixPrompt, 800);
+        const fixClean = fixed.replace(/^```json\s*/gm, "").replace(/^```\s*/gm, "").replace(/```\s*$/gm, "").trim();
+        const fixMatch = fixClean.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(fixMatch ? fixMatch[0] : fixClean);
+      } catch { return; }
+    }
 
     const aiPicks = parsed.picks || [];
 
@@ -2180,23 +2188,21 @@ ${!techLoaded ? "NOTE: Live technical data not loaded. Base analysis on fundamen
 STOCKS (ticker|company|sector|price|1Y|daily|volume|demand|buyPressure|RSI|BollingerB%|PE|yield|earningsGrowth|ROE|D/E):
 ${stockTable}
 
-Return ONLY valid JSON, no markdown:
+CRITICAL: Return ONLY valid JSON. No markdown fences. No apostrophes in text (use "cannot" not "can't"). No special characters. No newlines inside string values.
 {
-  "market_brief": "3-4 sentence professional morning-note style overview of the MSX opportunity set right now. Be direct and specific.",
+  "market_brief": "3-4 sentence morning-note overview. Be direct and specific.",
   "picks": [
     {
       "ticker": "XXXX",
       "company": "Full name",
-      "conviction": "high" or "medium",
-      "entry_thesis": "One sharp sentence — the core trade idea",
-      "rationale": "3-4 sentences of deep professional reasoning. Explain what the indicators are telling you, what the market is doing with this stock, and why now is the right time. Cite specific numbers.",
+      "conviction": "high",
+      "entry_thesis": "One sharp sentence about the core trade idea",
+      "rationale": "3-4 sentences of professional reasoning citing specific numbers. No apostrophes.",
       "entry": 0.000,
       "target": 0.000,
       "stop": 0.000,
-      "signals": [
-        {"type": "bullish" or "caution", "label": "specific signal with actual value"}
-      ],
-      "risk": "Primary risk to this trade in one sentence."
+      "signals": [{"type": "bullish", "label": "specific signal with value"}],
+      "risk": "Primary risk in one sentence. No apostrophes."
     }
   ]
 }`;
@@ -2204,12 +2210,23 @@ Return ONLY valid JSON, no markdown:
     const raw = await window.AI.call(prompt, 1500);
     let parsed;
     try {
-      parsed = JSON.parse(raw.replace(/^```json|^```|```$/gm, "").trim());
+      // Clean the response: strip markdown fences, fix common JSON issues
+      let cleaned = raw.replace(/^```json\s*/gm, "").replace(/^```\s*/gm, "").replace(/```\s*$/gm, "").trim();
+      // Extract just the JSON object if there's surrounding text
+      const objMatch = cleaned.match(/\{[\s\S]*\}/);
+      if (objMatch) cleaned = objMatch[0];
+      parsed = JSON.parse(cleaned);
     } catch {
-      // AI didn't return pure JSON — try to extract it
-      const match = raw.match(/\{[\s\S]*\}/);
-      if (match) parsed = JSON.parse(match[0]);
-      else throw new Error("AI returned unexpected format. Try again.");
+      // Last resort: ask AI to fix its own JSON
+      try {
+        const fixPrompt = "The following text is supposed to be valid JSON but has a syntax error. Fix it and return ONLY the corrected JSON, nothing else:\n" + raw.slice(0, 2000);
+        const fixed = await window.AI.call(fixPrompt, 1500);
+        const fixCleaned = fixed.replace(/^```json\s*/gm, "").replace(/^```\s*/gm, "").replace(/```\s*$/gm, "").trim();
+        const fixMatch = fixCleaned.match(/\{[\s\S]*\}/);
+        parsed = JSON.parse(fixMatch ? fixMatch[0] : fixCleaned);
+      } catch {
+        throw new Error("AI returned invalid JSON. Please try again.");
+      }
     }
 
     const picks = (parsed.picks || []).slice(0, 5);
@@ -2249,4 +2266,3 @@ Return ONLY valid JSON, no markdown:
 }
 
 if(aiBtn) aiBtn.addEventListener("click", runAiAnalysis);
-
