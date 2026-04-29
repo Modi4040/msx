@@ -2266,3 +2266,4 @@ CRITICAL: Return ONLY valid JSON. No markdown fences. No apostrophes in text (us
 }
 
 if(aiBtn) aiBtn.addEventListener("click", runAiAnalysis);
+
