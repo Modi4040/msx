@@ -377,24 +377,27 @@ function buildPolyline(points, width, height, minY, maxY, accessor) {
 function renderPriceChart(chartData) {
   const points = chartData.series || [];
   if (!points.length) return '<p class="chart-empty">No chart history returned by MSX for this stock.</p>';
-  // PAD_L small (no left labels), PAD_R large (right labels), PAD_B for x-axis
-  const width = 720, height = 260, PAD_L = 6, PAD_R = 54, PAD_B = 28;
-  const chartW = width - PAD_L - PAD_R, chartH = height - PAD_B;
+  // PAD_L small (no left labels), PAD_R large (right labels), PAD_T top padding, PAD_B for x-axis
+  const width = 720, height = 280, PAD_L = 6, PAD_R = 58, PAD_B = 28, PAD_T = 14;
+  const chartW = width - PAD_L - PAD_R, chartH = height - PAD_B - PAD_T;
   const values = points.flatMap(p => [p.close, p.bollingerUpper ?? p.close, p.bollingerLower ?? p.close]).filter(Number.isFinite);
   const minY = Math.min(...values), maxY = Math.max(...values), range = maxY - minY || 1;
   function toX(i) { return PAD_L + (i / Math.max(points.length - 1, 1)) * chartW; }
-  function toY(v) { return chartH - ((v - minY) / range) * chartH; }
+  function toY(v) { return PAD_T + chartH - ((v - minY) / range) * chartH; }
   function buildLine(pts, acc) { return pts.map((p, i) => `${toX(i).toFixed(1)},${toY(acc(p)).toFixed(1)}`).join(" "); }
   const bandPts = points.filter(p => p.bollingerUpper !== null && p.bollingerLower !== null);
   const closeLine = buildLine(points, p => p.close);
   const upperLine = buildLine(bandPts, p => p.bollingerUpper);
   const midLine   = buildLine(bandPts, p => p.bollingerMiddle);
   const lowerLine = buildLine(bandPts, p => p.bollingerLower);
-  // Y-axis labels on the RIGHT side
-  const yLabels = Array.from({length: 5}, (_, i) => {
-    const val = minY + (i / 4) * range, y = toY(val);
+  // Y-axis: 6 ticks on right side, clamped so top label never clips
+  const yLabels = Array.from({length: 6}, (_, i) => {
+    const val = minY + (i / 5) * range;
+    const y = toY(val);
+    const labelY = Math.max(PAD_T + 6, Math.min(y, height - PAD_B - 6));
+    const isBold = i === 5;
     return `<line x1="${PAD_L}" y1="${y.toFixed(1)}" x2="${(width - PAD_R).toFixed(1)}" y2="${y.toFixed(1)}" stroke="rgba(68,56,36,0.08)" stroke-width="1"/>
-            <text x="${(width - PAD_R + 5).toFixed(1)}" y="${y.toFixed(1)}" text-anchor="start" dominant-baseline="middle" font-size="10" fill="#6f6251">${val.toFixed(3)}</text>`;
+            <text x="${(width - PAD_R + 5).toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="start" dominant-baseline="middle" font-size="10" fill="${isBold ? "#241d12" : "#6f6251"}" font-weight="${isBold ? "700" : "400"}">${val.toFixed(3)}</text>`;
   }).join("");
   const step = Math.max(1, Math.floor(points.length / 5));
   const xLabels = points.map((p, i) => {
@@ -412,7 +415,7 @@ function renderPriceChart(chartData) {
       <span><i class="chart-dot" style="background:#8f7b55"></i>Bollinger mid</span>
       <span><i class="chart-dot" style="background:#b85c38"></i>Bollinger lower</span>
     </div>
-    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" aria-label="Price chart with Bollinger bands">
+    <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="xMidYMid meet" aria-label="Price chart with Bollinger bands">
       ${yLabels}${xLabels}
       <polyline points="${upperLine}" fill="none" stroke="#d7a84a" stroke-width="2"/>
       <polyline points="${midLine}" fill="none" stroke="#8f7b55" stroke-width="1.5" stroke-dasharray="5 4"/>
@@ -596,12 +599,12 @@ async function renderDetail(stock) {
     if (state.stockAnalysisCache[stock.ticker]) {
       detailAiOutput.innerHTML = state.stockAnalysisCache[stock.ticker];
     }
-    detailAiBtn.addEventListener("click", () => {
+    detailAiBtn.addEventListener("click", async () => {
       detailAiBtn.disabled = true;
       detailAiBtn.classList.add("loading");
       detailAiBtn.querySelector(".ai-btn-icon").textContent = "◌";
       detailAiOutput.innerHTML = `<div class="ai-thinking"><div class="ai-thinking-dots"><span></span><span></span><span></span></div>Analysing ${stock.ticker}…</div>`;
-      setTimeout(() => {
+      setTimeout(async () => {
         try {
           const analysis = scoreStock(stock);
           const pick = {
@@ -618,8 +621,23 @@ async function renderDetail(stock) {
             _support: analysis._support,
           };
           const html = renderAiPick(pick, 0);
-          state.stockAnalysisCache[stock.ticker] = html;
           detailAiOutput.innerHTML = html;
+
+          // ── Groq: add a concise AI trade note ────────────────────────
+          if (window.AI.hasKey()) {
+            const a = scoreStock(stock);
+            const ctx = `MSX analyst. 2-3 sentence trade note for ${stock.ticker} (${stock.company}). Price:${stock.price.toFixed(3)} OMR, 1Y:${stock.priceChange1Y.toFixed(1)}%, Daily:${stock.dailyChange.toFixed(2)}%, Vol:${stock.volumeVsAvg20.toFixed(1)}x, Demand:${stock.demandScore}, RSI:${stock.rsi14.toFixed(0)}, PE:${stock.peRatio.toFixed(1)}, Yield:${stock.dividendYield.toFixed(1)}%, Entry:${a._entry.toFixed(3)}, Target:${a._target.toFixed(3)}, Stop:${a._stop.toFixed(3)}. Be direct, cite numbers, give a clear buy/hold/avoid verdict.`;
+            try {
+              const note = await window.AI.call(ctx, 200);
+              const noteDiv = document.createElement("div");
+              noteDiv.className = "ai-market-read";
+              noteDiv.style.marginTop = "12px";
+              noteDiv.innerHTML = `<span class="ai-market-read-label">◈ AI Trade Note</span><p>${note.split("\n").join("<br>")}</p>`;
+              detailAiOutput.appendChild(noteDiv);
+            } catch {}
+          }
+
+          state.stockAnalysisCache[stock.ticker] = detailAiOutput.innerHTML;
         } catch (err) {
           detailAiOutput.innerHTML = `<p class="ai-error">Analysis error: ${err.message}</p>`;
         } finally {
@@ -722,21 +740,14 @@ function wireStockChat(stock) {
       const systemContext = buildStockContext(stock);
       const priorTurns = history.slice(0, -1).map(m => (m.role === "user" ? "Investor" : "Analyst") + ": " + m.content).join("\n");
       const fullPrompt = systemContext + "\n\n" + (priorTurns ? "Conversation so far:\n" + priorTurns + "\n\n" : "") + "Investor: " + userText;
-      const response = await fetch("/api/ai/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: fullPrompt })
-      });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.error || ("Server error " + response.status));
-      const raw = (data.response || "").trim();
+      const raw = await window.AI.call(fullPrompt, 400);
       document.getElementById(thinkingId)?.remove();
       history.push({ role: "assistant", content: raw });
       renderHistory();
     } catch (err) {
       document.getElementById(thinkingId)?.remove();
-      const errMsg = err.message.includes("Ollama is not running") || err.message.includes("503")
-        ? "Ollama is not running. Open a terminal and run: ollama serve"
+      const errMsg = err.message.includes("No API key")
+        ? "Enter your Groq key in the chat panel below — it will be shared across all AI features."
         : "Error: " + err.message;
       history.push({ role: "assistant", content: errMsg });
       renderHistory();
@@ -916,13 +927,12 @@ els.fileInput.addEventListener("change", async (event) => {
 
 (function() {
   const PROVIDER_CONFIG = {
-    ollama:  { label: "Ollama",   keyRequired: false, keyLink: "",                                   keyPlaceholder: "" },
-    groq:    { label: "Groq",     keyRequired: true,  keyLink: "https://console.groq.com/keys",      keyPlaceholder: "Paste Groq API key (free at console.groq.com — no credit card)" },
-    openai:  { label: "ChatGPT",  keyRequired: true,  keyLink: "https://platform.openai.com/api-keys", keyPlaceholder: "Paste OpenAI API key" },
+    groq:    { label: "⚡ Groq",    keyRequired: true, keyLink: "https://console.groq.com/keys",       keyPlaceholder: "Paste Groq API key — free at console.groq.com (no credit card)" },
+    openai:  { label: "⬡ ChatGPT", keyRequired: true, keyLink: "https://platform.openai.com/api-keys", keyPlaceholder: "Paste OpenAI API key" },
   };
 
-  let currentProvider = "ollama";
-  let providerKeys = { gemini: "", openai: "" };
+  let currentProvider = "groq";
+  let providerKeys = { groq: "", openai: "" };
   let globalChatHistory = [];
 
   const messagesEl   = document.getElementById("globalChatMessages");
@@ -938,18 +948,16 @@ els.fileInput.addEventListener("change", async (event) => {
 
   // ── Provider toggle ─────────────────────────────────────────────────────────
   function setProvider(p) {
+    if (!PROVIDER_CONFIG[p]) p = "groq"; // fallback
     currentProvider = p;
+    window.AI.provider = p;
     providerBtns.forEach(b => b.classList.toggle("active", b.dataset.provider === p));
     const cfg = PROVIDER_CONFIG[p];
-    if (cfg.keyRequired) {
-      keyRow.style.display = "flex";
-      keyInput.placeholder = cfg.keyPlaceholder;
-      keyLink.href = cfg.keyLink;
-      keyLink.textContent = p === "gemini" ? "Get free key ↗" : "Get key ↗";
-      keyInput.value = providerKeys[p] || "";
-    } else {
-      keyRow.style.display = "none";
-    }
+    keyRow.style.display = "flex";
+    keyInput.placeholder = cfg.keyPlaceholder;
+    keyLink.href = cfg.keyLink;
+    keyLink.textContent = "Get free key ↗";
+    keyInput.value = providerKeys[p] || window.AI.getKey() || "";
   }
 
   providerBtns.forEach(btn => {
@@ -957,7 +965,13 @@ els.fileInput.addEventListener("change", async (event) => {
   });
 
   keyInput.addEventListener("input", () => {
-    providerKeys[currentProvider] = keyInput.value.trim();
+    const key = keyInput.value.trim();
+    providerKeys[currentProvider] = key;
+    // Share key with global AI manager so all features use it
+    window.AI.provider = currentProvider;
+    if (currentProvider === "groq") window.AI.groqKey = key;
+    else if (currentProvider === "openai") window.AI.openaiKey = key;
+    window.AI._notifyKeyChange();
   });
 
   // ── Build full stock context for the global agent ───────────────────────────
@@ -1110,29 +1124,15 @@ Question: ${userText}`;
     try {
       let endpoint, body;
 
-      if (currentProvider === "ollama") {
-        endpoint = "/api/ai/chat";
-        body = { prompt: fullPrompt, model: window._ollamaModel || "llama3.2" };
-      } else if (currentProvider === "groq") {
-        const key = providerKeys.groq || keyInput.value.trim();
-        if (!key) throw new Error("Please paste your Groq API key above. Get one free at console.groq.com — no credit card needed.");
-        endpoint = "/api/ai/chat/groq";
-        body = { apiKey: key, prompt: fullPrompt };
-      } else {
-        const key = providerKeys.openai || keyInput.value.trim();
-        if (!key) throw new Error("Please paste your OpenAI API key above. Get one at platform.openai.com");
-        endpoint = "/api/ai/chat/openai";
-        body = { apiKey: key, prompt: fullPrompt };
+      // Sync key from input to AI manager before calling
+      const inputKey = keyInput.value.trim();
+      if (inputKey) {
+        providerKeys[currentProvider] = inputKey;
+        if (currentProvider === "groq") window.AI.groqKey = inputKey;
+        else window.AI.openaiKey = inputKey;
       }
-
-      const resp = await fetch(endpoint, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "Server error " + resp.status);
-      const raw = (data.response || "").trim();
+      if (!window.AI.hasKey()) throw new Error("Please paste your API key above to start chatting.");
+      const raw = await window.AI.call(fullPrompt, 512);
 
       document.getElementById(thinkingId)?.remove();
       globalChatHistory.push({ role: "assistant", content: raw });
@@ -1234,6 +1234,99 @@ Question: ${userText}`;
   setProvider("ollama");
   checkOllamaStatus();
 })();
+
+
+// ══════════════════════════════════════════════════════════════════════════════
+// GLOBAL AI MANAGER — single Groq key shared across all features
+// ══════════════════════════════════════════════════════════════════════════════
+
+window.AI = {
+  groqKey: "",
+  openaiKey: "",
+  provider: "groq",
+
+  setKey(key) {
+    key = key.trim();
+    if (key.startsWith("gsk_")) {
+      this.groqKey = key;
+      this.provider = "groq";
+    } else if (key.startsWith("sk-")) {
+      this.openaiKey = key;
+      this.provider = "openai";
+    }
+    // Persist in sessionStorage so key survives page navigation
+    try { sessionStorage.setItem("ai_groq_key", this.groqKey); sessionStorage.setItem("ai_openai_key", this.openaiKey); } catch {}
+    this._notifyKeyChange();
+  },
+
+  getKey() {
+    return this.provider === "groq" ? this.groqKey : this.openaiKey;
+  },
+
+  loadSaved() {
+    try {
+      this.groqKey = sessionStorage.getItem("ai_groq_key") || "";
+      this.openaiKey = sessionStorage.getItem("ai_openai_key") || "";
+      if (this.groqKey) this.provider = "groq";
+      else if (this.openaiKey) this.provider = "openai";
+    } catch {}
+  },
+
+  hasKey() {
+    return !!(this.groqKey || this.openaiKey);
+  },
+
+  _listeners: [],
+  onKeyChange(fn) { this._listeners.push(fn); },
+  _notifyKeyChange() { this._listeners.forEach(fn => fn()); },
+
+  async call(prompt, maxTokens = 500) {
+    // Try server-side key first (no user key needed)
+    try {
+      const resp = await fetch("/api/ai/default", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.response) return data.response;
+      // If server has no key configured, fall through to user key
+      if (resp.status !== 500 || !data.error?.includes("not configured")) {
+        throw new Error(data.error || "AI error");
+      }
+    } catch (e) {
+      if (!e.message?.includes("not configured") && !e.message?.includes("Failed to fetch")) {
+        throw e;
+      }
+    }
+
+    // Fallback: use user-provided key
+    if (!this.hasKey()) {
+      throw new Error("No API key set. Enter your Groq key in the chat panel below.");
+    }
+    if (this.provider === "groq") {
+      const resp = await fetch("/api/ai/chat/groq", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: this.groqKey, prompt })
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Groq error");
+      return data.response || "";
+    } else {
+      const resp = await fetch("/api/ai/chat/openai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: this.openaiKey, prompt })
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "OpenAI error");
+      return data.response || "";
+    }
+  }
+};
+
+window.AI.loadSaved();
 
 loadLiveStocks();
 
@@ -1938,12 +2031,12 @@ function scoreStock(s) {
   return{score,signals:allSignals,rationale,entry_thesis,risk,_entry,_target,_stop,_support};
 }
 
-function runAiAnalysis() {
+async function runAiAnalysis() {
   const stocks = state.filteredStocks;
   if (!stocks.length) { aiOutput.innerHTML=`<p class="ai-error">No stock data loaded. Please load data first.</p>`; return; }
   aiBtn.disabled=true; aiBtn.classList.add("loading"); aiBtn.querySelector(".ai-btn-icon").textContent="◌";
   aiOutput.innerHTML=`<div class="ai-thinking"><div class="ai-thinking-dots"><span></span><span></span><span></span></div>Running professional trading analysis across ${stocks.length} stocks…</div>`;
-  setTimeout(()=>{
+  setTimeout(async ()=>{
     try{
       const scored=stocks.map(s=>({stock:s,...scoreStock(s)}));
       scored.sort((a,b)=>b.score-a.score);
@@ -1963,6 +2056,24 @@ function runAiAnalysis() {
       // Save to state so re-renders don't wipe it
       state.aiOutputHtml = qualityNote+summaryHtml+picksHtml;
       aiOutput.innerHTML = state.aiOutputHtml;
+
+      // ── Groq enrichment: add AI narrative below the cards ──────────────
+      if (window.AI.hasKey()) {
+        const topTickers = picks.slice(0,5).map(p => {
+          const s = p.stock;
+          const a = scoreStock(s);
+          return `${s.ticker}(${s.company}):price=${s.price.toFixed(3)},1Y=${s.priceChange1Y.toFixed(1)}%,daily=${s.dailyChange.toFixed(2)}%,vol=${s.volumeVsAvg20.toFixed(1)}x,demand=${s.demandScore},RSI=${s.rsi14.toFixed(0)},PE=${s.peRatio.toFixed(1)},yield=${s.dividendYield.toFixed(1)}%,score=${a.score}`;
+        }).join("\n");
+        const groqPrompt = "You are a senior MSX (Muscat Stock Exchange) trading analyst. In 3-4 sentences, give a morning-briefing style summary of these top stock picks and the overall market opportunity. Be direct and cite specific numbers. Stocks:\n" + topTickers;
+        try {
+          const narrative = await window.AI.call(groqPrompt, 300);
+          const narDiv = document.createElement("div");
+          narDiv.className = "ai-market-read";
+          narDiv.innerHTML = `<span class="ai-market-read-label">◈ AI Morning Brief</span><p>${narrative.split("\n").join("<br>")}</p>`;
+          aiOutput.insertBefore(narDiv, aiOutput.firstChild);
+          state.aiOutputHtml = aiOutput.innerHTML;
+        } catch {}
+      }
     }catch(err){
       aiOutput.innerHTML=`<p class="ai-error">Analysis error: ${err.message}</p>`;
     }finally{
