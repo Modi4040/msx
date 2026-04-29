@@ -1,3 +1,96 @@
+// ══════════════════════════════════════════════════════════════════════════════
+// GLOBAL AI MANAGER — single Groq key shared across all features
+// ══════════════════════════════════════════════════════════════════════════════
+
+window.AI = {
+  groqKey: "",
+  openaiKey: "",
+  provider: "groq",
+
+  setKey(key) {
+    key = key.trim();
+    if (key.startsWith("gsk_")) {
+      this.groqKey = key;
+      this.provider = "groq";
+    } else if (key.startsWith("sk-")) {
+      this.openaiKey = key;
+      this.provider = "openai";
+    }
+    // Persist in sessionStorage so key survives page navigation
+    try { sessionStorage.setItem("ai_groq_key", this.groqKey); sessionStorage.setItem("ai_openai_key", this.openaiKey); } catch {}
+    this._notifyKeyChange();
+  },
+
+  getKey() {
+    return this.provider === "groq" ? this.groqKey : this.openaiKey;
+  },
+
+  loadSaved() {
+    try {
+      this.groqKey = sessionStorage.getItem("ai_groq_key") || "";
+      this.openaiKey = sessionStorage.getItem("ai_openai_key") || "";
+      if (this.groqKey) this.provider = "groq";
+      else if (this.openaiKey) this.provider = "openai";
+    } catch {}
+  },
+
+  hasKey() {
+    return !!(this.groqKey || this.openaiKey);
+  },
+
+  _listeners: [],
+  onKeyChange(fn) { this._listeners.push(fn); },
+  _notifyKeyChange() { this._listeners.forEach(fn => fn()); },
+
+  async call(prompt, maxTokens = 500) {
+    // Try server-side key first (no user key needed)
+    try {
+      const resp = await fetch("/api/ai/default", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.response) return data.response;
+      // If server has no key configured, fall through to user key
+      if (resp.status !== 500 || !data.error?.includes("not configured")) {
+        throw new Error(data.error || "AI error");
+      }
+    } catch (e) {
+      if (!e.message?.includes("not configured") && !e.message?.includes("Failed to fetch")) {
+        throw e;
+      }
+    }
+
+    // Fallback: use user-provided key
+    if (!this.hasKey()) {
+      throw new Error("No API key set. Enter your Groq key in the chat panel below.");
+    }
+    if (this.provider === "groq") {
+      const resp = await fetch("/api/ai/chat/groq", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: this.groqKey, prompt })
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "Groq error");
+      return data.response || "";
+    } else {
+      const resp = await fetch("/api/ai/chat/openai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: this.openaiKey, prompt })
+      });
+      const data = await resp.json();
+      if (!resp.ok) throw new Error(data.error || "OpenAI error");
+      return data.response || "";
+    }
+  }
+};
+
+window.AI.loadSaved();
+
+
 const sampleStocks = [
   {
     ticker: "BKDB",
@@ -1234,99 +1327,6 @@ Question: ${userText}`;
   setProvider("ollama");
   checkOllamaStatus();
 })();
-
-
-// ══════════════════════════════════════════════════════════════════════════════
-// GLOBAL AI MANAGER — single Groq key shared across all features
-// ══════════════════════════════════════════════════════════════════════════════
-
-window.AI = {
-  groqKey: "",
-  openaiKey: "",
-  provider: "groq",
-
-  setKey(key) {
-    key = key.trim();
-    if (key.startsWith("gsk_")) {
-      this.groqKey = key;
-      this.provider = "groq";
-    } else if (key.startsWith("sk-")) {
-      this.openaiKey = key;
-      this.provider = "openai";
-    }
-    // Persist in sessionStorage so key survives page navigation
-    try { sessionStorage.setItem("ai_groq_key", this.groqKey); sessionStorage.setItem("ai_openai_key", this.openaiKey); } catch {}
-    this._notifyKeyChange();
-  },
-
-  getKey() {
-    return this.provider === "groq" ? this.groqKey : this.openaiKey;
-  },
-
-  loadSaved() {
-    try {
-      this.groqKey = sessionStorage.getItem("ai_groq_key") || "";
-      this.openaiKey = sessionStorage.getItem("ai_openai_key") || "";
-      if (this.groqKey) this.provider = "groq";
-      else if (this.openaiKey) this.provider = "openai";
-    } catch {}
-  },
-
-  hasKey() {
-    return !!(this.groqKey || this.openaiKey);
-  },
-
-  _listeners: [],
-  onKeyChange(fn) { this._listeners.push(fn); },
-  _notifyKeyChange() { this._listeners.forEach(fn => fn()); },
-
-  async call(prompt, maxTokens = 500) {
-    // Try server-side key first (no user key needed)
-    try {
-      const resp = await fetch("/api/ai/default", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt })
-      });
-      const data = await resp.json();
-      if (resp.ok && data.response) return data.response;
-      // If server has no key configured, fall through to user key
-      if (resp.status !== 500 || !data.error?.includes("not configured")) {
-        throw new Error(data.error || "AI error");
-      }
-    } catch (e) {
-      if (!e.message?.includes("not configured") && !e.message?.includes("Failed to fetch")) {
-        throw e;
-      }
-    }
-
-    // Fallback: use user-provided key
-    if (!this.hasKey()) {
-      throw new Error("No API key set. Enter your Groq key in the chat panel below.");
-    }
-    if (this.provider === "groq") {
-      const resp = await fetch("/api/ai/chat/groq", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: this.groqKey, prompt })
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "Groq error");
-      return data.response || "";
-    } else {
-      const resp = await fetch("/api/ai/chat/openai", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: this.openaiKey, prompt })
-      });
-      const data = await resp.json();
-      if (!resp.ok) throw new Error(data.error || "OpenAI error");
-      return data.response || "";
-    }
-  }
-};
-
-window.AI.loadSaved();
 
 loadLiveStocks();
 
