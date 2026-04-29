@@ -184,6 +184,14 @@ def msx_stock_detail(ticker: str):
         return jsonify({"ticker": ticker, "error": str(exc), "found": False}), 200
 
 
+@app.get("/api/ai/status")
+def ai_status():
+    """Check if server-side AI key is configured."""
+    has_groq = bool(os.environ.get("GROQ_API_KEY", ""))
+    has_openai = bool(os.environ.get("OPENAI_API_KEY", ""))
+    return jsonify({"groq": has_groq, "openai": has_openai})
+
+
 @app.post("/api/ai/default")
 def ai_default():
     """Server-side AI call using GROQ_API_KEY env var — no key needed from browser."""
