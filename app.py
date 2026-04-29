@@ -97,42 +97,48 @@ def ai_chat():
 
 @app.post("/api/ai/chat/groq")
 def ai_chat_groq():
-    """Proxy to Groq API — free tier, no credit card needed."""
+    """Proxy to Groq API — tries user key, falls back to server keys."""
     body = request.get_json(force=True, silent=True) or {}
-    api_key = body.get("apiKey", "")
-    prompt  = body.get("prompt", "")
-    if not api_key:
-        return jsonify({"error": "No Groq API key provided. Get one free (no credit card) at console.groq.com"}), 400
+    user_key = body.get("apiKey", "").strip()
+    prompt   = body.get("prompt", "")
     if not prompt:
         return jsonify({"error": "No prompt provided"}), 400
-    model = body.get("model", "llama-3.3-70b-versatile")
+    model      = body.get("model", "llama-3.3-70b-versatile")
     max_tokens = int(body.get("max_tokens", 512))
-    try:
-        resp = req.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "temperature": 0.7,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        text = data["choices"][0]["message"]["content"]
-        return jsonify({"response": text})
-    except req.exceptions.HTTPError as exc:
+
+    # Build key list: user key first, then server keys as fallback
+    keys = []
+    if user_key:
+        keys.append(user_key)
+    for var in ["GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_API_KEY_3"]:
+        k = os.environ.get(var, "").strip()
+        if k and k not in keys:
+            keys.append(k)
+
+    if not keys:
+        return jsonify({"error": "No Groq API key. Get one free at console.groq.com"}), 400
+
+    last_err = ""
+    for key in keys:
         try:
-            msg = exc.response.json().get("error", {}).get("message", exc.response.text[:300])
-        except Exception:
-            msg = exc.response.text[:300]
-        if "rate" in msg.lower() or "quota" in msg.lower():
-            return jsonify({"error": "Groq rate limit hit — wait a moment and try again. Free tier allows ~30 requests/minute."}), 429
-        return jsonify({"error": f"Groq error: {msg}"}), 502
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+            text = call_groq(key, prompt, model, max_tokens)
+            return jsonify({"response": text})
+        except req.exceptions.HTTPError as exc:
+            try:
+                msg = exc.response.json().get("error", {}).get("message", exc.response.text[:200])
+            except Exception:
+                msg = exc.response.text[:200]
+            if exc.response.status_code == 429:
+                last_err = "rate_limit"
+                continue
+            return jsonify({"error": f"Groq error: {msg}"}), 502
+        except Exception as exc:
+            last_err = str(exc)
+            continue
+
+    if last_err == "rate_limit":
+        return jsonify({"error": "Daily token limit reached on all keys. Add GROQ_API_KEY_2 in Render environment for automatic fallback."}), 429
+    return jsonify({"error": f"Groq unavailable: {last_err}"}), 500
 
 
 @app.post("/api/ai/chat/openai")
@@ -194,46 +200,61 @@ def ai_status():
     return jsonify({"groq": has_groq, "openai": has_openai})
 
 
+def call_groq(api_key: str, prompt: str, model: str, max_tokens: int):
+    """Call Groq API and return text response. Raises on error."""
+    resp = req.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        json={"model": model, "messages": [{"role": "user", "content": prompt}],
+              "max_tokens": max_tokens, "temperature": 0.7},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["choices"][0]["message"]["content"]
+
+
 @app.post("/api/ai/default")
 def ai_default():
-    """Server-side AI call using GROQ_API_KEY env var — no key needed from browser."""
-    GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-    if not GROQ_API_KEY:
-        return jsonify({"error": "GROQ_API_KEY not configured on server."}), 500
-
+    """Server-side AI — tries all configured keys in sequence, auto-fallback on rate limit."""
     body = request.get_json(force=True, silent=True) or {}
     prompt = body.get("prompt", "")
     if not prompt:
         return jsonify({"error": "No prompt provided"}), 400
 
-    model = body.get("model", "llama-3.3-70b-versatile")
-    max_tokens = body.get("max_tokens", 600)
+    model     = body.get("model", "llama-3.1-8b-instant")
+    max_tokens = int(body.get("max_tokens", 600))
 
-    try:
-        resp = req.post(
-            "https://api.groq.com/openai/v1/chat/completions",
-            headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
-            json={
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": max_tokens,
-                "temperature": 0.7,
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        text = resp.json()["choices"][0]["message"]["content"]
-        return jsonify({"response": text})
-    except req.exceptions.HTTPError as exc:
+    # Collect all configured Groq keys (primary + up to 3 backups)
+    keys = []
+    for var in ["GROQ_API_KEY", "GROQ_API_KEY_2", "GROQ_API_KEY_3", "GROQ_API_KEY_4"]:
+        k = os.environ.get(var, "").strip()
+        if k:
+            keys.append(k)
+
+    if not keys:
+        return jsonify({"error": "No AI API key configured on server. Add GROQ_API_KEY in Render environment variables."}), 500
+
+    last_error = ""
+    for key in keys:
         try:
-            msg = exc.response.json().get("error", {}).get("message", exc.response.text[:300])
-        except Exception:
-            msg = exc.response.text[:300]
-        if "rate limit" in msg.lower() or "rate_limit" in msg.lower():
-            return jsonify({"error": f"Daily token limit reached. Resets in ~24h. Try the chat instead, or wait and retry."}), 429
-        return jsonify({"error": f"Groq error: {msg}"}), 502
-    except Exception as exc:
-        return jsonify({"error": str(exc)}), 500
+            text = call_groq(key, prompt, model, max_tokens)
+            return jsonify({"response": text})
+        except req.exceptions.HTTPError as exc:
+            try:
+                msg = exc.response.json().get("error", {}).get("message", exc.response.text[:200])
+            except Exception:
+                msg = exc.response.text[:200]
+            if "rate_limit" in msg.lower() or "rate limit" in msg.lower() or exc.response.status_code == 429:
+                last_error = "rate_limit"
+                continue  # Try next key
+            return jsonify({"error": f"Groq error: {msg}"}), 502
+        except Exception as exc:
+            last_error = str(exc)
+            continue
+
+    if last_error == "rate_limit":
+        return jsonify({"error": "All AI keys have reached their daily token limit. Limits reset every 24h. You can add more keys as GROQ_API_KEY_2, GROQ_API_KEY_3 in Render environment variables."}), 429
+    return jsonify({"error": f"AI unavailable: {last_error}"}), 500
 
 
 if __name__ == "__main__":
