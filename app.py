@@ -105,14 +105,16 @@ def ai_chat_groq():
         return jsonify({"error": "No Groq API key provided. Get one free (no credit card) at console.groq.com"}), 400
     if not prompt:
         return jsonify({"error": "No prompt provided"}), 400
+    model = body.get("model", "llama-3.3-70b-versatile")
+    max_tokens = int(body.get("max_tokens", 512))
     try:
         resp = req.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 512,
+                "max_tokens": max_tokens,
                 "temperature": 0.7,
             },
             timeout=30,
@@ -204,14 +206,17 @@ def ai_default():
     if not prompt:
         return jsonify({"error": "No prompt provided"}), 400
 
+    model = body.get("model", "llama-3.3-70b-versatile")
+    max_tokens = body.get("max_tokens", 600)
+
     try:
         resp = req.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.3-70b-versatile",
+                "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "max_tokens": 600,
+                "max_tokens": max_tokens,
                 "temperature": 0.7,
             },
             timeout=30,
@@ -224,6 +229,8 @@ def ai_default():
             msg = exc.response.json().get("error", {}).get("message", exc.response.text[:300])
         except Exception:
             msg = exc.response.text[:300]
+        if "rate limit" in msg.lower() or "rate_limit" in msg.lower():
+            return jsonify({"error": f"Daily token limit reached. Resets in ~24h. Try the chat instead, or wait and retry."}), 429
         return jsonify({"error": f"Groq error: {msg}"}), 502
     except Exception as exc:
         return jsonify({"error": str(exc)}), 500
