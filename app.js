@@ -43,44 +43,48 @@ window.AI = {
   _notifyKeyChange() { this._listeners.forEach(fn => fn()); },
 
   async call(prompt, maxTokens = 500) {
-    // Step 1: Try server-side key (GROQ_API_KEY env var on server)
-    try {
-      const resp = await fetch("/api/ai/default", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt })
-      });
-      const data = await resp.json();
-      if (resp.ok && data.response) {
-        return data.response; // Server key worked — done
-      }
-      // Server has no key configured — fall through to user key
-      if (!data.error?.includes("not configured")) {
-        throw new Error(data.error || "AI error");
-      }
-    } catch (e) {
-      // Only fall through if it's a "not configured" or network error
-      // Re-throw any real AI errors (rate limits, invalid requests etc.)
-      const msg = e.message || "";
-      if (!msg.includes("not configured") && !msg.includes("Failed to fetch") && !msg.includes("NetworkError")) {
-        throw e;
-      }
-    }
-
-    // Step 2: Fallback to user-provided key
-    if (!this.hasKey()) {
-      throw new Error("No API key set. Enter your Groq key in the chat panel below.");
-    }
-    const endpoint = this.provider === "groq" ? "/api/ai/chat/groq" : "/api/ai/chat/openai";
-    const apiKey = this.provider === "groq" ? this.groqKey : this.openaiKey;
-    const resp = await fetch(endpoint, {
+    // Always try server-side key first
+    const serverResp = await fetch("/api/ai/default", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ apiKey, prompt })
+      body: JSON.stringify({ prompt })
     });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.error || "AI error");
-    return data.response || "";
+    const serverData = await serverResp.json();
+
+    // If server key worked, return immediately
+    if (serverResp.ok && serverData.response) {
+      return serverData.response;
+    }
+
+    // Server key not configured — try user-provided key
+    if (this.groqKey) {
+      const resp = await fetch("/api/ai/chat/groq", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: this.groqKey, prompt })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.response) return data.response;
+      throw new Error(data.error || "Groq error");
+    }
+
+    if (this.openaiKey) {
+      const resp = await fetch("/api/ai/chat/openai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ apiKey: this.openaiKey, prompt })
+      });
+      const data = await resp.json();
+      if (resp.ok && data.response) return data.response;
+      throw new Error(data.error || "OpenAI error");
+    }
+
+    // No key anywhere — show helpful message
+    const serverError = serverData.error || "";
+    if (serverError.includes("not configured")) {
+      throw new Error("No API key set. Enter your Groq key in the chat panel below.");
+    }
+    throw new Error(serverError || "AI not available. Enter your Groq key in the chat panel.");
   }
 };
 
@@ -944,6 +948,7 @@ function loadStocks(stocks, options = {}) {
   state.technicalTotal = options.technicalTotal || 0;
   state.chartCache = {};
   state.aiOutputHtml = null;
+  breakoutScanRunning = false;
   // stockAnalysisCache intentionally preserved across reloads
   if (state.refreshTimer) {
     clearTimeout(state.refreshTimer);
@@ -1240,7 +1245,7 @@ Question: ${userText}`;
         if (currentProvider === "groq") window.AI.groqKey = inputKey;
         else window.AI.openaiKey = inputKey;
       }
-      if (!window.AI.hasKey()) throw new Error("Please paste your API key above to start chatting.");
+      // Server-side key handles auth — just call directly
       const raw = await window.AI.call(fullPrompt, 512);
 
       document.getElementById(thinkingId)?.remove();
@@ -1532,7 +1537,9 @@ function renderBreakoutCard(stock, analysis) {
     </div>`;
 }
 
-function runBreakoutScan() {
+let breakoutScanRunning = false;
+
+async function runBreakoutScan() {
   const panel  = document.getElementById("breakoutPanel");
   const cards  = document.getElementById("breakoutCards");
   const timestamp = document.getElementById("breakoutTimestamp");
@@ -1541,25 +1548,108 @@ function runBreakoutScan() {
   const stocks = state.filteredStocks || [];
   if (!stocks.length) { panel.style.display = "none"; return; }
 
-  const hits = stocks
+  // Rule-based pre-filter: find candidates
+  const candidates = stocks
     .map(s => ({ stock: s, analysis: detectBreakout(s) }))
     .filter(h => h.analysis !== null)
     .sort((a, b) => b.analysis.score - a.analysis.score)
-    .slice(0, 6);
+    .slice(0, 8);
 
-  if (!hits.length) {
-    panel.style.display = "none";
-    return;
-  }
+  if (!candidates.length) { panel.style.display = "none"; return; }
 
+  // Show rule-based results immediately
   panel.style.display = "";
-  cards.innerHTML = hits.map(h => renderBreakoutCard(h.stock, h.analysis)).join("");
-  if (timestamp) {
-    const now = new Date();
-    timestamp.textContent = "Last scan: " + now.toLocaleTimeString();
-  }
+  cards.innerHTML = candidates.map(h => renderBreakoutCard(h.stock, h.analysis)).join("");
+  if (timestamp) timestamp.textContent = "Scanning with AI…";
 
-  // Click card → select that stock in the table
+  wireBreakoutClicks(cards);
+
+  // AI enrichment — only run once per data load, not every 15s re-render
+  if (breakoutScanRunning) return;
+  breakoutScanRunning = true;
+
+  try {
+    const stockTable = candidates.map(h => {
+      const s = h.stock;
+      return `${s.ticker}|${s.company}|${s.price>0?s.price.toFixed(3):"n/a"}|` +
+        `Daily:${s.dailyChange>0?"+":""}${s.dailyChange.toFixed(2)}%|` +
+        `Vol:${s.volumeVsAvg20>0?s.volumeVsAvg20.toFixed(1)+"x":"n/a"}|` +
+        `Demand:${s.demandScore>0?s.demandScore.toFixed(0):"n/a"}|` +
+        `BuyPres:${s.buyPressure>0?s.buyPressure.toFixed(0)+"%":"n/a"}|` +
+        `RSI:${s.rsi14>0?s.rsi14.toFixed(0):"n/a"}|` +
+        `BollingerB%:${s.bollingerPercentB>0?s.bollingerPercentB.toFixed(0):"n/a"}|` +
+        `PE:${s.peRatio>0?s.peRatio.toFixed(1):"n/a"}|` +
+        `Yield:${s.dividendYield>0?s.dividendYield.toFixed(1)+"%":"n/a"}`;
+    }).join("\n");
+
+    const prompt = `You are a professional MSX (Muscat Stock Exchange) stock trader scanning for accumulation and breakout setups.
+
+TASK: From these pre-screened candidates, identify up to 5 stocks that show genuine short-term accumulation or breakout potential within 1-5 days. Think about: volume patterns, order flow, price compression, demand signals, and fundamental support.
+
+ACCUMULATION SIGNALS TO LOOK FOR:
+- Volume spike with stable price = smart money quietly buying
+- High demand/buy pressure = institutional orders in book
+- RSI 40-58 = building momentum without being overbought  
+- Bollinger %B 20-50 = price in lower-middle of bands, room to run
+- Positive daily move + above-average volume = breakout beginning
+
+STOCKS (ticker|company|price|daily|volume|demand|buyPressure|RSI|BollingerB%|PE|yield):
+${stockTable}
+
+Return ONLY valid JSON, no markdown:
+{
+  "picks": [
+    {
+      "ticker": "XXXX",
+      "timeframe": "1-2 days" or "2-4 days" or "3-5 days",
+      "conviction": "high" or "medium" or "watch",
+      "ai_note": "2-3 sentences: what specifically makes this stock show accumulation NOW? What are buyers doing? What is the trigger for the breakout? Be specific with numbers."
+    }
+  ]
+}`;
+
+    const raw = await window.AI.call(prompt, 800);
+    let parsed;
+    try {
+      const clean = raw.replace(/^```json|^```|```$/gm, "").trim();
+      const match = clean.match(/\{[\s\S]*\}/);
+      parsed = JSON.parse(match ? match[0] : clean);
+    } catch { return; }
+
+    const aiPicks = parsed.picks || [];
+
+    // Enrich each breakout card with AI note
+    aiPicks.forEach(pick => {
+      const card = cards.querySelector(`[data-ticker="${pick.ticker}"]`);
+      if (!card) return;
+      const existingNote = card.querySelector(".breakout-ai-note");
+      if (existingNote) existingNote.remove();
+      const noteDiv = document.createElement("div");
+      noteDiv.className = "breakout-ai-note";
+      noteDiv.innerHTML = `<span class="breakout-ai-label">◈ AI</span> ${(pick.ai_note || "").split("\n").join("<br>")}`;
+      card.appendChild(noteDiv);
+
+      // Update timeframe if AI gave one
+      const tfEl = card.querySelector(".breakout-timeframe");
+      if (tfEl && pick.timeframe) tfEl.innerHTML = `⏱ AI estimate: <strong>${pick.timeframe}</strong>`;
+    });
+
+    if (timestamp) {
+      const now = new Date();
+      timestamp.textContent = "AI scan: " + now.toLocaleTimeString();
+    }
+
+  } catch { 
+    if (timestamp) {
+      const now = new Date();
+      timestamp.textContent = "Last scan: " + now.toLocaleTimeString();
+    }
+  } finally {
+    breakoutScanRunning = false;
+  }
+}
+
+function wireBreakoutClicks(cards) {
   cards.querySelectorAll(".breakout-card").forEach(card => {
     card.addEventListener("click", () => {
       const ticker = card.dataset.ticker;
@@ -2050,52 +2140,112 @@ function scoreStock(s) {
 async function runAiAnalysis() {
   const stocks = state.filteredStocks;
   if (!stocks.length) { aiOutput.innerHTML=`<p class="ai-error">No stock data loaded. Please load data first.</p>`; return; }
-  aiBtn.disabled=true; aiBtn.classList.add("loading"); aiBtn.querySelector(".ai-btn-icon").textContent="◌";
-  aiOutput.innerHTML=`<div class="ai-thinking"><div class="ai-thinking-dots"><span></span><span></span><span></span></div>Running professional trading analysis across ${stocks.length} stocks…</div>`;
-  setTimeout(async ()=>{
-    try{
-      const scored=stocks.map(s=>({stock:s,...scoreStock(s)}));
-      scored.sort((a,b)=>b.score-a.score);
-      const picks=scored.slice(0,5).filter(p=>p.score>10);
-      if(!picks.length){aiOutput.innerHTML=`<p class="ai-error">No suitable opportunities found in current dataset.</p>`;return;}
-      const techLoaded=stocks.some(s=>(s.rsi14||0)>0||(s.demandScore||0)>0);
-      const qualityNote=!techLoaded?`<p class="ai-data-warning">⚠ Live technical indicators not loaded — RSI, Bollinger and demand unavailable. Click "Refresh Live MSX" then re-run for full signals.</p>`:"";
-      const avgScore=picks.reduce((s,p)=>s+p.score,0)/picks.length;
-      const highConv=picks.filter(p=>p.score>60).length;
-      const topSectors=[...new Set(picks.map(p=>p.stock.sector))].join(", ");
-      const marketRead=`Screening ${stocks.length} MSX stocks identifies ${picks.length} buying opportunities, with ${highConv} high-conviction setup${highConv!==1?"s":""}. Opportunity is concentrated in ${topSectors||"mixed sectors"}. Average conviction score: ${avgScore.toFixed(0)}/100. ${techLoaded?"Technical indicators confirm the fundamental picture.":"Load live data for full technical confirmation."}`;
-      const summaryHtml=`<div class="ai-market-read"><span class="ai-market-read-label">Market read</span><p>${marketRead}</p></div>`;
-      const picksHtml=picks.map((p,i)=>{
-        const pick={ticker:p.stock.ticker,company:p.stock.company,conviction:p.score>60?"high":"medium",entry_thesis:p.entry_thesis,rationale:p.rationale,signals:p.signals,risk:p.risk,_entry:p._entry,_target:p._target,_stop:p._stop,_support:p._support};
-        return renderAiPick(pick,i);
-      }).join("");
-      // Save to state so re-renders don't wipe it
-      state.aiOutputHtml = qualityNote+summaryHtml+picksHtml;
-      aiOutput.innerHTML = state.aiOutputHtml;
 
-      // ── Groq enrichment: add AI narrative below the cards ──────────────
-      if (window.AI.hasKey()) {
-        const topTickers = picks.slice(0,5).map(p => {
-          const s = p.stock;
-          const a = scoreStock(s);
-          return `${s.ticker}(${s.company}):price=${s.price.toFixed(3)},1Y=${s.priceChange1Y.toFixed(1)}%,daily=${s.dailyChange.toFixed(2)}%,vol=${s.volumeVsAvg20.toFixed(1)}x,demand=${s.demandScore},RSI=${s.rsi14.toFixed(0)},PE=${s.peRatio.toFixed(1)},yield=${s.dividendYield.toFixed(1)}%,score=${a.score}`;
-        }).join("\n");
-        const groqPrompt = "You are a senior MSX (Muscat Stock Exchange) trading analyst. In 3-4 sentences, give a morning-briefing style summary of these top stock picks and the overall market opportunity. Be direct and cite specific numbers. Stocks:\n" + topTickers;
-        try {
-          const narrative = await window.AI.call(groqPrompt, 300);
-          const narDiv = document.createElement("div");
-          narDiv.className = "ai-market-read";
-          narDiv.innerHTML = `<span class="ai-market-read-label">◈ AI Morning Brief</span><p>${narrative.split("\n").join("<br>")}</p>`;
-          aiOutput.insertBefore(narDiv, aiOutput.firstChild);
-          state.aiOutputHtml = aiOutput.innerHTML;
-        } catch {}
-      }
-    }catch(err){
-      aiOutput.innerHTML=`<p class="ai-error">Analysis error: ${err.message}</p>`;
-    }finally{
-      aiBtn.disabled=false; aiBtn.classList.remove("loading"); aiBtn.querySelector(".ai-btn-icon").textContent="◈";
+  aiBtn.disabled=true; aiBtn.classList.add("loading"); aiBtn.querySelector(".ai-btn-icon").textContent="◌";
+  aiOutput.innerHTML=`<div class="ai-thinking"><div class="ai-thinking-dots"><span></span><span></span><span></span></div>AI is analysing ${stocks.length} MSX stocks — thinking like a professional trader…</div>`;
+
+  try {
+    // Pre-filter top 20 by rule-based score to keep prompt size manageable
+    const prescored = stocks.map(s => ({stock:s, ...scoreStock(s)}))
+      .sort((a,b) => b.score - a.score).slice(0, 20);
+
+    const techLoaded = stocks.some(s => (s.rsi14||0) > 0 || (s.demandScore||0) > 0);
+
+    // Build rich stock table for AI
+    const stockTable = prescored.map(p => {
+      const s = p.stock;
+      return `${s.ticker}|${s.company}|${s.sector}|${s.price>0?s.price.toFixed(3):"n/a"} OMR|` +
+        `1Y:${s.priceChange1Y.toFixed(1)}%|Daily:${s.dailyChange>0?"+":""}${s.dailyChange.toFixed(2)}%|` +
+        `Vol:${s.volumeVsAvg20>0?s.volumeVsAvg20.toFixed(1)+"x":"n/a"}|` +
+        `Demand:${s.demandScore>0?s.demandScore.toFixed(0):"n/a"}|BuyPres:${s.buyPressure>0?s.buyPressure.toFixed(0)+"%":"n/a"}|` +
+        `RSI:${s.rsi14>0?s.rsi14.toFixed(0):"n/a"}|BollingerB%:${s.bollingerPercentB>0?s.bollingerPercentB.toFixed(0):"n/a"}|` +
+        `PE:${s.peRatio>0?s.peRatio.toFixed(1):"n/a"}|Yield:${s.dividendYield>0?s.dividendYield.toFixed(1)+"%":"n/a"}|` +
+        `EG:${s.earningsGrowth.toFixed(1)}%|ROE:${s.roe.toFixed(1)}%|D/E:${s.debtToEquity.toFixed(1)}`;
+    }).join("\n");
+
+    const prompt = `You are a senior professional stock trader specialising in the Muscat Stock Exchange (MSX), Oman. You think like a prop trader — you weigh risk/reward, read price action, and combine multiple frameworks.
+
+TASK: Analyse the following MSX stocks and identify exactly 5 buying opportunities. For each pick, reason deeply — don't just list numbers, explain WHAT they mean and WHY this stock is worth buying now.
+
+MSX CONTEXT:
+- PE < 10 = genuinely cheap on MSX
+- Dividend yield > 5% = strong income floor
+- RSI < 35 = oversold opportunity | RSI > 70 = overbought, avoid
+- Bollinger %B < 20 = price near lower band (potential bounce) | > 80 = extended
+- Demand score > 65 = institutional buying | < 35 = sellers dominating
+- Volume > 1.3x avg with stable price = accumulation signal
+- "n/a" means live data not available for that field — use what is available
+${!techLoaded ? "NOTE: Live technical data not loaded. Base analysis on fundamentals and momentum." : ""}
+
+STOCKS (ticker|company|sector|price|1Y|daily|volume|demand|buyPressure|RSI|BollingerB%|PE|yield|earningsGrowth|ROE|D/E):
+${stockTable}
+
+Return ONLY valid JSON, no markdown:
+{
+  "market_brief": "3-4 sentence professional morning-note style overview of the MSX opportunity set right now. Be direct and specific.",
+  "picks": [
+    {
+      "ticker": "XXXX",
+      "company": "Full name",
+      "conviction": "high" or "medium",
+      "entry_thesis": "One sharp sentence — the core trade idea",
+      "rationale": "3-4 sentences of deep professional reasoning. Explain what the indicators are telling you, what the market is doing with this stock, and why now is the right time. Cite specific numbers.",
+      "entry": 0.000,
+      "target": 0.000,
+      "stop": 0.000,
+      "signals": [
+        {"type": "bullish" or "caution", "label": "specific signal with actual value"}
+      ],
+      "risk": "Primary risk to this trade in one sentence."
     }
-  },80);
+  ]
+}`;
+
+    const raw = await window.AI.call(prompt, 1500);
+    let parsed;
+    try {
+      parsed = JSON.parse(raw.replace(/^```json|^```|```$/gm, "").trim());
+    } catch {
+      // AI didn't return pure JSON — try to extract it
+      const match = raw.match(/\{[\s\S]*\}/);
+      if (match) parsed = JSON.parse(match[0]);
+      else throw new Error("AI returned unexpected format. Try again.");
+    }
+
+    const picks = (parsed.picks || []).slice(0, 5);
+    if (!picks.length) throw new Error("AI returned no picks. Try again.");
+
+    const techNote = !techLoaded ? `<p class="ai-data-warning">⚠ Live technical data not loaded — analysis based on fundamentals and momentum.</p>` : "";
+    const briefHtml = parsed.market_brief
+      ? `<div class="ai-market-read"><span class="ai-market-read-label">◈ AI Market Brief</span><p>${parsed.market_brief.split("\n").join("<br>")}</p></div>` : "";
+
+    // Build pick cards using AI data
+    const picksHtml = picks.map((p, i) => {
+      const stock = stocks.find(s => s.ticker === p.ticker) || {};
+      const aiPick = {
+        ticker: p.ticker,
+        company: p.company || stock.company || p.ticker,
+        conviction: p.conviction || "medium",
+        entry_thesis: p.entry_thesis || "",
+        rationale: p.rationale || "",
+        signals: p.signals || [],
+        risk: p.risk || "",
+        _entry: p.entry || stock.price || 0,
+        _target: p.target || (stock.price||0) * 1.1,
+        _stop: p.stop || (stock.price||0) * 0.93,
+        _support: (stock.price||0) * 0.955,
+      };
+      return renderAiPick(aiPick, i);
+    }).join("");
+
+    state.aiOutputHtml = techNote + briefHtml + picksHtml;
+    aiOutput.innerHTML = state.aiOutputHtml;
+
+  } catch(err) {
+    aiOutput.innerHTML=`<p class="ai-error">AI analysis error: ${err.message}</p>`;
+  } finally {
+    aiBtn.disabled=false; aiBtn.classList.remove("loading"); aiBtn.querySelector(".ai-btn-icon").textContent="◈";
+  }
 }
 
 if(aiBtn) aiBtn.addEventListener("click", runAiAnalysis);
