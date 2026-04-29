@@ -61,7 +61,7 @@ window.AI = {
       const resp = await fetch("/api/ai/chat/groq", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: this.groqKey, prompt })
+        body: JSON.stringify({ apiKey: this.groqKey, prompt, model, max_tokens: maxTokens })
       });
       const data = await resp.json();
       if (resp.ok && data.response) return data.response;
@@ -72,7 +72,7 @@ window.AI = {
       const resp = await fetch("/api/ai/chat/openai", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ apiKey: this.openaiKey, prompt })
+        body: JSON.stringify({ apiKey: this.openaiKey, prompt, model, max_tokens: maxTokens })
       });
       const data = await resp.json();
       if (resp.ok && data.response) return data.response;
