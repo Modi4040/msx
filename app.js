@@ -2173,7 +2173,7 @@ async function runAiAnalysis() {
 
     const prompt = `You are a senior professional stock trader specialising in the Muscat Stock Exchange (MSX), Oman. You think like a prop trader — you weigh risk/reward, read price action, and combine multiple frameworks.
 
-TASK: Analyse the following MSX stocks and identify exactly 5 buying opportunities. For each pick, reason deeply — don't just list numbers, explain WHAT they mean and WHY this stock is worth buying now.
+TASK: From the stocks below, you MUST select EXACTLY 5 buying opportunities (no fewer). For each pick, give deep professional reasoning — explain WHAT the indicators mean and WHY this stock is worth buying now. Your response MUST contain 5 picks in the picks array, even if some are weaker than others — rank them best to worst.
 
 MSX CONTEXT:
 - PE < 10 = genuinely cheap on MSX
@@ -2272,4 +2272,3 @@ CRITICAL: Return ONLY valid JSON. No markdown fences. No apostrophes in text (us
 }
 
 if(aiBtn) aiBtn.addEventListener("click", runAiAnalysis);
-
