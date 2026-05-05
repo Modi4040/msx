@@ -586,14 +586,15 @@ def calculate_rsi(values: List[float], period: int) -> float:
     return 100 - (100 / (1 + rs))
 
 
+# Aggressive matching for bond/sukuk instruments on MSX
 BOND_KEYWORDS = re.compile(
-    r"(?i)(sukuk|corporate.?bond|govt.?bond|government.?bond|sovereign.?bond"
-    r"|t-bill|treasury.?bill|fixed.?income|debt.?securit"
-    r"|corporate bonds|trust certificate)",
+    r"sukuk|bond|tier.?1|tier.?2|perpetual|notes? due|coupon"
+    r"|trust certificate|debt securit|fixed income|treasury|t-bill",
     re.IGNORECASE,
 )
 
-BOND_TICKER_PREFIXES = ("CB", "SK", "TB", "GS")
+# MSX bond/sukuk ticker prefixes — anything starting with these is debt
+BOND_TICKER_PREFIXES = ("CB", "SK", "TB", "GS", "GB", "GD", "OBC", "OBS")
 
 
 def is_bond(row: Dict[str, object]) -> bool:
@@ -601,11 +602,22 @@ def is_bond(row: Dict[str, object]) -> bool:
     ticker  = str(row.get("ticker", "")).strip().upper()
     company = str(row.get("company", "")).strip()
     sector  = str(row.get("sector", "")).strip()
+
+    # Check name/sector keywords (most reliable)
     if BOND_KEYWORDS.search(company) or BOND_KEYWORDS.search(sector):
         return True
-    if any(ticker.startswith(p) and len(ticker) > len(p) and ticker[len(p):].isdigit()
-           for p in BOND_TICKER_PREFIXES):
+
+    # MSX ticker prefix patterns — bonds often have prefix + digits (e.g. CB001, SK0024)
+    for p in BOND_TICKER_PREFIXES:
+        if ticker.startswith(p) and len(ticker) > len(p):
+            tail = ticker[len(p):]
+            if tail.isdigit() or (len(tail) >= 2 and tail[:-1].isdigit()):
+                return True
+
+    # MSX bonds often have very long numeric tickers (e.g. 5+ chars mostly digits)
+    if len(ticker) >= 5 and sum(c.isdigit() for c in ticker) >= len(ticker) * 0.6:
         return True
+
     return False
 
 
