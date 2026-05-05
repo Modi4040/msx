@@ -587,26 +587,41 @@ def calculate_rsi(values: List[float], period: int) -> float:
 
 
 BOND_KEYWORDS = re.compile(
-    r"sukuk|t-bill|treasury bill|govt bond|government bond|sovereign bond",
+    r"(?i)(sukuk|corporate.?bond|govt.?bond|government.?bond|sovereign.?bond"
+    r"|t-bill|treasury.?bill|fixed.?income|debt.?securit"
+    r"|corporate bonds|trust certificate)",
     re.IGNORECASE,
 )
 
+BOND_TICKER_PREFIXES = ("CB", "SK", "TB", "GS")
+
+
+def is_bond(row: Dict[str, object]) -> bool:
+    """Return True if this row looks like a bond, sukuk, or debt instrument."""
+    ticker  = str(row.get("ticker", "")).strip().upper()
+    company = str(row.get("company", "")).strip()
+    sector  = str(row.get("sector", "")).strip()
+    if BOND_KEYWORDS.search(company) or BOND_KEYWORDS.search(sector):
+        return True
+    if any(ticker.startswith(p) and len(ticker) > len(p) and ticker[len(p):].isdigit()
+           for p in BOND_TICKER_PREFIXES):
+        return True
+    return False
+
 
 def filter_bonds(rows: List[Dict[str, object]]) -> List[Dict[str, object]]:
-    """Remove only clear bond/sukuk instruments — keep all equity companies."""
+    """Remove corporate bonds, sukuk, and government debt instruments."""
     kept = []
     removed = []
     for row in rows:
         if not row.get("ticker", "").strip():
             continue
-        # Only match against ticker and sector, not company name (avoids false positives)
-        fields = str(row.get("ticker", "")) + " " + str(row.get("sector", ""))
-        if BOND_KEYWORDS.search(fields):
+        if is_bond(row):
             removed.append(row.get("ticker", "?"))
             continue
         kept.append(row)
     if removed:
-        print(f"[MSX] Bond filter removed: {removed[:10]}")
+        print(f"[MSX] Filtered bonds/sukuk: {removed}")
     return kept or rows
 
 
